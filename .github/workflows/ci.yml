@@ -1,0 +1,74 @@
+name: CI/CD Pipeline
+
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+
+jobs:
+  # =========================
+  #       CI JOB
+  # =========================
+  ci:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest locust
+
+      - name: Run unit tests (pytest)
+        run: pytest -v
+
+      - name: Run locust load test (headless)
+        run: |
+          locust -f locustfile.py --headless -u 10 -r 5 -t 30s \
+                 --host http://localhost:8000 &
+          sleep 3
+          uvicorn main:app --host 0.0.0.0 --port 8000 &
+          sleep 30
+        shell: bash
+
+  # =========================
+  #       CD JOB
+  # =========================
+  cd:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to DockerHub (optional)
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build Docker image
+        run: |
+          docker build -t myapp:${{ github.sha }} .
+          docker tag myapp:${{ github.sha }} myapp:latest
+
+      - name: Push Docker image (optional)
+        if: env.DOCKERHUB_USERNAME != ''
+        run: |
+          docker push myapp:${{ github.sha }}
+          docker push myapp:latest
